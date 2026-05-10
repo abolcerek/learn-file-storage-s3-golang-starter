@@ -75,7 +75,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	randomBytes := make([]byte, 32)
 	rand.Read(randomBytes)
 	video_path := base64.RawURLEncoding.EncodeToString(randomBytes)
-	fmt.Printf("This is the video path: %v", video_path)
 	file_path := fmt.Sprintf("/%v.%v", video_path, file_extension)
 	file_path = filepath.Join(cfg.assetsRoot, file_path)
 	dest, err := os.Create(file_path)
