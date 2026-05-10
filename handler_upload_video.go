@@ -71,16 +71,38 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusBadRequest, "Unable to save file", err)
 		return
 	}
-	tempFile.Seek(0, io.SeekStart)
 	randBytes := make([]byte, 32)
-	rand.Read(randBytes)
+	_, err = rand.Read(randBytes)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Error creating bytes", err)
+		return
+	}
 	fileKey := base64.RawURLEncoding.EncodeToString(randBytes)
-	file_path := fmt.Sprintf("%v.%v", fileKey, file_extension)
+	var prefix string
+	aspectRatio, err := getVideoAspectRatio(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Error getting aspect ratio", err)
+		return
+	}
+	switch aspectRatio {
+		case "16:9":
+			prefix = "landscape"
+	 	case "9:16":
+			prefix = "portrait"
+		default:
+			prefix = "other"
+	}
+	file_path := fmt.Sprintf("%v/%v.%v", prefix, fileKey, file_extension)
 	input := &s3.PutObjectInput{
 		Bucket: &cfg.s3Bucket,
 		Key: &file_path,
 		Body: tempFile,
 		ContentType: &contentType,
+	}
+	_, err = tempFile.Seek(0, io.SeekStart)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Error saving video", err)
+		return
 	}
 	ctx := context.Background()
 	_, err = cfg.s3Client.PutObject(ctx, input)
@@ -90,7 +112,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 	bucket := cfg.s3Bucket
 	region := cfg.s3Region
-	videoUrl := fmt.Sprintf("https://%v.s3.%v.amazonaws.com/%v.%v", bucket, region, fileKey, file_extension)
+	videoUrl := fmt.Sprintf("https://%v.s3.%v.amazonaws.com/%v", bucket, region, file_path)
 	metadata.VideoURL = &videoUrl
 	err = cfg.db.UpdateVideo(metadata)
 	if err != nil {
