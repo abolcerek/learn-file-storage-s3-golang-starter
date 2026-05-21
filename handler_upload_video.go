@@ -4,15 +4,17 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
+
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
-	"fmt"
 )
 
 func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request) {
@@ -93,16 +95,24 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 			prefix = "other"
 	}
 	file_path := fmt.Sprintf("%v/%v.%v", prefix, fileKey, file_extension)
+	outputFilePath, err := processVideoForFastStart(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Error getting output file path", err)
+		fmt.Printf("This is the output file path: %v", outputFilePath)
+		return
+	}
+	fileBody, err := os.Open(outputFilePath)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Error opening temp file", err)
+		return
+	} 
+	defer fileBody.Close()
+	defer os.Remove(outputFilePath)
 	input := &s3.PutObjectInput{
 		Bucket: &cfg.s3Bucket,
 		Key: &file_path,
-		Body: tempFile,
+		Body: fileBody,
 		ContentType: &contentType,
-	}
-	_, err = tempFile.Seek(0, io.SeekStart)
-	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Error saving video", err)
-		return
 	}
 	ctx := context.Background()
 	_, err = cfg.s3Client.PutObject(ctx, input)
@@ -120,4 +130,14 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	respondWithJSON(w, http.StatusOK, metadata)
+}
+
+func processVideoForFastStart(filePath string) (string, error) {
+	outputFilePath := filePath + ".processing"
+	cmd := exec.Command("ffmpeg", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", outputFilePath)
+	err := cmd.Run()
+	if err != nil {
+		return "", err
+	}
+	return outputFilePath, nil
 }
