@@ -11,9 +11,11 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
+	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 	"github.com/google/uuid"
 )
 
@@ -87,12 +89,12 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	switch aspectRatio {
-		case "16:9":
-			prefix = "landscape"
-	 	case "9:16":
-			prefix = "portrait"
-		default:
-			prefix = "other"
+	case "16:9":
+		prefix = "landscape"
+	case "9:16":
+		prefix = "portrait"
+	default:
+		prefix = "other"
 	}
 	file_path := fmt.Sprintf("%v/%v.%v", prefix, fileKey, file_extension)
 	outputFilePath, err := processVideoForFastStart(tempFile.Name())
@@ -105,13 +107,13 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Error opening temp file", err)
 		return
-	} 
+	}
 	defer fileBody.Close()
 	defer os.Remove(outputFilePath)
 	input := &s3.PutObjectInput{
-		Bucket: &cfg.s3Bucket,
-		Key: &file_path,
-		Body: fileBody,
+		Bucket:      &cfg.s3Bucket,
+		Key:         &file_path,
+		Body:        fileBody,
 		ContentType: &contentType,
 	}
 	ctx := context.Background()
@@ -121,15 +123,19 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	bucket := cfg.s3Bucket
-	region := cfg.s3Region
-	videoUrl := fmt.Sprintf("https://%v.s3.%v.amazonaws.com/%v", bucket, region, file_path)
+	videoUrl := fmt.Sprintf("%v,%v", bucket, file_path)
 	metadata.VideoURL = &videoUrl
-	err = cfg.db.UpdateVideo(metadata)
+	video, err := cfg.dbVideoToSignedVideo(metadata)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Error saving video", err)
+		return
+	}
+	err = cfg.db.UpdateVideo(video)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Error updating video", err)
 		return
 	}
-	respondWithJSON(w, http.StatusOK, metadata)
+	respondWithJSON(w, http.StatusOK, video)
 }
 
 func processVideoForFastStart(filePath string) (string, error) {
@@ -140,4 +146,35 @@ func processVideoForFastStart(filePath string) (string, error) {
 		return "", err
 	}
 	return outputFilePath, nil
+}
+
+func generatePresignedURL(s3Client *s3.Client, bucket, key string, expireTime time.Duration) (string, error) {
+	presignedClient := s3.NewPresignClient(s3Client)
+	ctx := context.Background()
+	params := &s3.GetObjectInput{
+		Bucket: &bucket,
+		Key:    &key,
+	}
+	request, err := presignedClient.PresignGetObject(ctx, params, s3.WithPresignExpires(expireTime))
+	if err != nil {
+		return "", err
+	}
+	return request.URL, nil
+}
+
+func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
+	if video.VideoURL == nil {
+		return video, nil
+	}
+	videoURL := *video.VideoURL
+	splitStrings := strings.Split(videoURL, ",")
+	if len(splitStrings) < 2 {
+		return video, nil
+	}
+	presignedURL, err := generatePresignedURL(cfg.s3Client, splitStrings[0], splitStrings[1], time.Hour)
+	if err != nil {
+		return video, err
+	}
+	video.VideoURL = &presignedURL
+	return video, nil
 }
