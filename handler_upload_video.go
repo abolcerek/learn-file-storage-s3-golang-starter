@@ -11,11 +11,9 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
-	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 	"github.com/google/uuid"
 )
 
@@ -122,20 +120,15 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		respondWithError(w, http.StatusBadRequest, "Error saving video", err)
 		return
 	}
-	bucket := cfg.s3Bucket
-	videoUrl := fmt.Sprintf("%v,%v", bucket, file_path)
+	distribution := cfg.s3CfDistribution
+	videoUrl := fmt.Sprintf("%v/%v", distribution, file_path)
 	metadata.VideoURL = &videoUrl
-	video, err := cfg.dbVideoToSignedVideo(metadata)
-	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Error saving video", err)
-		return
-	}
-	err = cfg.db.UpdateVideo(video)
+	err = cfg.db.UpdateVideo(metadata)
 	if err != nil {
 		respondWithError(w, http.StatusBadRequest, "Error updating video", err)
 		return
 	}
-	respondWithJSON(w, http.StatusOK, video)
+	respondWithJSON(w, http.StatusOK, metadata)
 }
 
 func processVideoForFastStart(filePath string) (string, error) {
@@ -146,35 +139,4 @@ func processVideoForFastStart(filePath string) (string, error) {
 		return "", err
 	}
 	return outputFilePath, nil
-}
-
-func generatePresignedURL(s3Client *s3.Client, bucket, key string, expireTime time.Duration) (string, error) {
-	presignedClient := s3.NewPresignClient(s3Client)
-	ctx := context.Background()
-	params := &s3.GetObjectInput{
-		Bucket: &bucket,
-		Key:    &key,
-	}
-	request, err := presignedClient.PresignGetObject(ctx, params, s3.WithPresignExpires(expireTime))
-	if err != nil {
-		return "", err
-	}
-	return request.URL, nil
-}
-
-func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
-	if video.VideoURL == nil {
-		return video, nil
-	}
-	videoURL := *video.VideoURL
-	splitStrings := strings.Split(videoURL, ",")
-	if len(splitStrings) < 2 {
-		return video, nil
-	}
-	presignedURL, err := generatePresignedURL(cfg.s3Client, splitStrings[0], splitStrings[1], time.Hour)
-	if err != nil {
-		return video, err
-	}
-	video.VideoURL = &presignedURL
-	return video, nil
 }
